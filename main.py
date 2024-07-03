@@ -14,13 +14,36 @@ intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
 intents.members = True
-intents.webhooks = True  # Required for creating webhooks
+intents.webhooks = True
 intents.guilds = True
 bot = commands.Bot(command_prefix='.', intents=intents, help_command=None)
 
 roles_filename = 'allowed_roles.json'
 config_filename = 'config.json'
+mention_settings_filename = 'mention_settings.json'
 
+def load_mention_settings():
+    if os.path.exists(mention_settings_filename):
+        with open(mention_settings_filename, 'r') as f:
+            return json.load(f)
+    else:
+        return {}
+
+mention_settings = load_mention_settings()
+
+# Save mention settings function
+def save_mention_settings():
+    with open(mention_settings_filename, 'w') as f:
+        json.dump(mention_settings, f, indent=4)
+
+# Function to check if bot can send DMs to a user
+async def can_receive_dms(user):
+    try:
+        await user.create_dm()
+        return True
+    except discord.Forbidden:
+        return False
+    
 def load_config():
     if os.path.exists(config_filename):
         with open(config_filename, 'r') as f:
@@ -347,5 +370,59 @@ def load_config():
         return {}
 
 config = load_config()
+
+
+@bot.command(name='ping', help='Check the bot\'s latency.')
+async def ping(ctx):
+    latency = bot.latency * 1000  # Convert latency to milliseconds
+    embed = discord.Embed(
+        title='Pong! 🏓',
+        description=f'Latency: {latency:.2f} ms',
+        color=discord.Color.green()
+    )
+    await ctx.send(embed=embed)
+
+@bot.command(name='enablementions', aliases=['enablemention'], help='Enable mention notifications via DM.')
+async def enable_mentions(ctx):
+    user_id = str(ctx.author.id)
+    
+    # Check if user can receive DMs
+    if not await can_receive_dms(ctx.author):
+        await ctx.send('Please enable your DMs so that I can notify you.')
+        return
+
+    # Update mention settings for the user
+    mention_settings[user_id] = True
+    save_mention_settings()
+
+    await ctx.send('You will now receive mention notifications via DM.')
+
+@bot.event
+async def on_message(message):
+    if message.mentions and not message.author.bot:
+        for mention in message.mentions:
+            user_id = str(mention.id)
+            if user_id in mention_settings and mention_settings[user_id]:
+                # Notify user via DM if possible
+                user = bot.get_user(mention.id)
+                if user:
+                    if await can_receive_dms(user):
+                        embed = discord.Embed(
+                            title=f'You were mentioned in {message.guild.name}',
+                            description=f'**Message Link:** [Jump to Message]({message.jump_url})\n\n**Message Content:**\n{message.content}',
+                            color=discord.Color.blue(),
+                            timestamp=message.created_at
+                        )
+                        embed.set_author(name=message.author.name, icon_url=message.author.avatar.url)
+                        embed.set_footer(text=f'Mentioned in #{message.channel.name}')
+
+                        await user.send(embed=embed)
+                    else:
+                        # Handle closed DMs
+                        await message.channel.send(f"{mention.mention}, please enable your DMs so that I can notify you.")
+                else:
+                    print(f'Failed to find user {user_id}.')
+    
+    await bot.process_commands(message)
 
 bot.run(os.getenv('DISCORD_TOKEN'))
